@@ -1,0 +1,124 @@
+#!/bin/sh -e
+# Copyright (c) 2016 The crouton Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+REQUIRES='audio'
+PROVIDES='x11'
+DESCRIPTION='X.Org X11 backend. Enables GPU acceleration on supported platforms.'
+CHROOTBIN='croutoncycle croutontriggerd croutonxinitrc-wrapper setres xinit'
+CHROOTETC='xbindkeysrc.scm xserverrc xserverrc-xorg xserverrc-local.example'
+if [ -z "$TARGETNOINSTALL" -a -f "/sys/class/tty/tty0/active" ]; then
+    error 99 "xorg target is only supported on Freon-based systems."
+fi
+. "${TARGETSDIR:="$PWD"}/common"
+
+### Append to prepare.sh:
+XMETHOD="${XMETHOD:-xorg}"
+
+# Migration from ambiguous XMETHOD
+rm -f '/etc/crouton/xserverrc-x11'
+
+
+# Figure out what we need on this system
+
+# Pull in backported Xorg when possible on precise to support newer hardware
+backport=''
+if release -eq precise; then
+    if [ "${ARCH#arm}" = "$ARCH" ]; then
+        backport='-lts-trusty'
+    else
+        # ARM only offers quantal backport at the moment
+        backport='-lts-quantal'
+    fi
+elif release -eq trusty; then
+    backport='-lts-xenial'
+fi
+
+# Avoid issues when jumping backports
+if [ "${DISTROAKA:-"$DISTRO"}" = 'debian' -a -n "$backport" ]; then
+    apt-mark unhold xserver-xorg-video-dummy || true 2>/dev/null
+fi
+
+# Intel?
+inteldriver=''
+if [ "${ARCH#arm}" = "$ARCH" ]; then
+    inteldriver="xserver-xorg-video-intel$backport"
+fi
+
+# Catalog relevant and irrelevant video drivers
+fbdev="xserver-xorg-video-fbdev$backport"
+
+if release -lt sid -lt kali-rolling -lt vivid; then
+    modesetting="xserver-xorg-video-modesetting$backport"
+else
+    # modesetting is built into xserver-xorg-core
+    modesetting=''
+fi
+
+installvideodrivers="$modesetting"
+removevideodrivers="$fbdev $inteldriver"
+
+
+# Compile crazy xorg hacks
+compile freon '-ldl -ldrm -I/usr/include/libdrm' so libdrm-dev
+
+# No systems use kernel 3.4 anymore, so remove the mesa hack
+pinfile='/etc/apt/preferences.d/precise-mesa-pin'
+pinlist='/etc/apt/sources.list.d/precise.list'
+pindummypkg='libwayland-egl1-dummy'
+if [ -f "$pinfile" -o -f "$pinlist" ]; then
+    # No longer need the pin; remove it
+    rm -f "$pinfile" "$pinlist"
+    apt-get update || true
+    dpkg -r --force-depends "$pindummypkg"
+    apt-get -y --force-yes --no-install-recommends dist-upgrade -f
+fi
+
+# Install backported xorg instead of the default one
+if [ -n "$backport" ]; then
+    # We still install xorg later to pull in its dependencies
+    install --minimal "xserver-xorg$backport" "xserver-xorg-core$backport" \
+        "libgl1-mesa-glx$backport" \
+        "libegl1-mesa$backport" "libgles2-mesa$backport" \
+        "xserver-xorg-input-synaptics$backport" $installvideodrivers
+fi
+
+if release -lt stretch -lt kali-rolling -lt yakkety; then
+    vmmouse='xserver-xorg-input-vmmouse'
+else
+    # xserver-xorg-input-vmmouse is obsolete
+    vmmouse=''
+fi
+
+# Install xorg, no video drivers
+if [ -z "$inteldriver" -a -n "$backport" ] && release -eq precise; then
+    # xorg is packaged wrong on ARM and conflicts with xserver-xorg-lts-quantal
+    # so replace it with something not broken
+    install_dummy xorg -- xserver-xorg$backport libgl1-mesa-glx$backport \
+        libgl1-mesa-dri$backport libglu1-mesa xfonts-base x11-apps \
+        x11-session-utils x11-utils x11-xfs-utils x11-xkb-utils \
+        x11-xserver-utils xauth xinit xfonts-utils xkb-data xorg-docs-core \
+        xterm x11-common xinput
+else
+    install xorg $installvideodrivers -- xserver-xorg-video-all$backport \
+        $vmmouse
+fi
+
+# Remove bad video drivers
+if [ -n "$removevideodrivers" ]; then
+    remove $removevideodrivers
+fi
+
+# Remove old Intel SNA workaround
+rm -f '/usr/share/X11/xorg.conf.d/20-crouton-intel-sna.conf'
+
+# Fix launching X11 from inside crosh (user doesn't own a TTY)
+echo 'allowed_users=anybody' > '/etc/X11/Xwrapper.config'
+
+
+TIPS="$TIPS
+You can flip through your running chroot desktops and Chromium OS by hitting
+Ctrl+Alt+Shift+Back and Ctrl+Alt+Shift+Forward.
+"
+
+### append x11-common
