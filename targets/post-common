@@ -1,0 +1,79 @@
+#!/bin/sh -e
+# Copyright (c) 2014 The crouton Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# This is a target, but it's not selectable by the user. These are the commands
+# that get executed at the very end of the generated prepare.sh.
+# These commands are not optional and are automatically added to targets.
+
+REQUIRES=''
+DESCRIPTION=''
+HOSTBIN='enter-chroot delete-chroot edit-chroot mount-chroot unmount-chroot'
+HOSTBIN="$HOSTBIN crash_reporter_wrapper"
+. "${TARGETSDIR:="$PWD"}/common"
+
+### Append to prepare.sh:
+
+# Set the default coredump handler
+if [ ! -f '/etc/crouton/core_pattern' ]; then
+    core_pattern=''
+    if [ "$DISTRO" = 'ubuntu' ]; then
+        core_pattern='|/usr/share/apport/apport %p %s %c'
+    fi
+    echo "\
+# The first non-comment line is the core_pattern that applies to this chroot.
+# See man 5 core for details.
+
+$core_pattern" > '/etc/crouton/core_pattern'
+fi
+
+echo 'Cleaning up...' 1>&2
+if [ "${DISTROAKA:-"$DISTRO"}" = 'debian' ]; then
+    apt-get -y --purge autoremove
+    apt-get clean
+fi
+
+# From here on out is interactive stuff, so ensure we're printing to the user
+stdout_to_tty
+
+# Add the primary user
+groups='audio,video,sudo,plugdev'
+if ! grep -q ':1000:' /etc/passwd; then
+    while ! echo "$username" | grep -q '^[a-z][-a-z0-9_]*$'; do
+        if [ -n "$username" ]; then
+            echo 'Username must be lowercase letters, numbers, or dashes.'
+        fi
+        echo -n 'Please specify a username for the primary user: '
+        if [ -n "$USERNAME" ]; then
+            username="$USERNAME"
+            echo "$username"
+        else
+            read -r username junk
+        fi
+    done
+    useradd -u 1000 -G "$groups" -s '/bin/bash' -m "$username"
+    if [ -t 0 ]; then
+        tries=0
+    else
+        tries=3
+    fi
+    while [ "$tries" -lt 3 ] && ! passwd "$username"; do
+        tries="$((tries+1))"
+    done
+    if [ "$tries" = 3 ]; then
+        echo \
+"Password left unset. To set a password, inside the chroot run: passwd $username"
+    fi
+else
+    username="`awk -F: '$3==1000{print $1; exit}' '/etc/passwd'`"
+    usermod -a -G "$groups" "$username"
+fi
+
+if [ -n "$TIPS" ]; then
+    echo "
+Here's some tips:
+$TIPS"
+fi
+
+rm -f "$0"

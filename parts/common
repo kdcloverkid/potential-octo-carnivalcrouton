@@ -1,0 +1,32 @@
+#!/bin/sh -e
+# Copyright (c) 2014 The crouton Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+# Contains the mechanism to pull in scripts in the parts directory.
+# These scripts are inlined during installation.
+
+SCRIPTDIR="${SCRIPTDIR:-"`dirname "$0"`/.."}"
+
+# Imports an entire parts file into a script.
+# An import command should be the only thing on the line for proper processing.
+# Usage:
+#   import scriptfile[[,] scriptfile2]*
+# scriptfile should be parts-relative, i.e., getopts
+import() {
+    local path scriptfile
+    if [ -z "$1" ]; then
+        echo "    $*
+SyntaxError: invalid syntax" 1>&2
+        return 2
+    fi
+    for scriptfile in "$@"; do
+        scriptfile="${scriptfile%,}"
+        path="$SCRIPTDIR/parts/$scriptfile"
+        if [ ! -f "$path" ]; then
+            echo "ImportError: No module named $scriptfile" 1>&2
+            return 2
+        fi
+        . "$path"
+    done
+}
